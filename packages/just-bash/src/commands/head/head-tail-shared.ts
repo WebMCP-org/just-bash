@@ -1,5 +1,3 @@
-import { unsafeBytesFromLatin1 } from "../../encoding.js";
-import { readStdin } from "../pipeline-input.js";
 /**
  * Shared utilities for head and tail commands.
  */
@@ -140,29 +138,9 @@ export async function processHeadTailFiles(
   // If no files, read from stdin. head/tail are byte-clean: `\n` splits and
   // `-c` byte slices are byte-safe over the latin1 view, and the output is
   // marked binary so the pipeline glue / redirects don't UTF-8 re-encode it.
-  if (files.length === 0 && ctx.pipeline && cmdName === "head") {
-    let remaining = options.bytes ?? options.lines;
-    while (remaining > 0) {
-      const chunk = await ctx.pipeline.read();
-      if (chunk === null) break;
-      const content = latin1FromBytes(chunk.bytes);
-      const selected = getHead(
-        content,
-        remaining,
-        options.bytes === null ? null : remaining,
-      );
-      if (options.bytes !== null) remaining -= selected.length;
-      else {
-        for (let i = 0; i < selected.length; i++)
-          if (selected.charCodeAt(i) === 10) remaining--;
-      }
-      await ctx.pipeline.write(unsafeBytesFromLatin1(selected));
-    }
-    return { stdout: "", stderr: "", exitCode: 0, stdoutEncoding: "binary" };
-  }
   if (files.length === 0) {
     return {
-      stdout: contentProcessor(latin1FromBytes(await readStdin(ctx))),
+      stdout: contentProcessor(latin1FromBytes(ctx.stdin)),
       stderr: "",
       exitCode: 0,
       stdoutEncoding: "binary",

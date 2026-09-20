@@ -1,7 +1,6 @@
 import {
   ExecutionAbortedError,
   ExecutionLimitError,
-  PipelineClosedError,
 } from "./interpreter/errors.js";
 import { SecurityViolationError } from "./security/defense-in-depth-box.js";
 
@@ -11,7 +10,6 @@ import { SecurityViolationError } from "./security/defense-in-depth-box.js";
  */
 export function rethrowFatalExecutionError(error: unknown): void {
   if (
-    error instanceof PipelineClosedError ||
     error instanceof ExecutionLimitError ||
     error instanceof ExecutionAbortedError ||
     error instanceof SecurityViolationError

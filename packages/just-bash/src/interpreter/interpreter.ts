@@ -1,6 +1,3 @@
-import type { PipelineIO } from "../types.js";
-import { beginIsolatedShellState } from "./state-transaction.js";
-import { streamPipeline } from "./streaming-pipeline.js";
 /**
  * Interpreter - AST Execution Engine
  *
@@ -123,7 +120,6 @@ function unsupportedCommandNode(node: never): never {
 export type { InterpreterContext, InterpreterState } from "./types.js";
 
 export interface InterpreterOptions {
-  pipeline?: PipelineIO;
   fs: IFileSystem;
   commands: CommandRegistry;
   limits: Required<ExecutionLimits>;
@@ -156,7 +152,6 @@ export class Interpreter {
 
   constructor(options: InterpreterOptions, state: InterpreterState) {
     this.ctx = {
-      pipeline: options.pipeline,
       state,
       fs: options.fs,
       commands: options.commands,
@@ -530,30 +525,8 @@ export class Interpreter {
   }
 
   private async executePipeline(node: PipelineNode): Promise<ExecResult> {
-    const streamed = await streamPipeline(
-      this.ctx,
-      node,
-      (command, pipeline) => {
-        const state = { ...this.ctx.state };
-        beginIsolatedShellState(state);
-        state.lastArg = "";
-        // @banned-pattern-ignore: Pipeline stages reuse this.ctx.executionScope and execFn; only mutable shell state is copied, no budget is created.
-        const child = new Interpreter(
-          { ...this.ctx, exec: this.ctx.execFn, pipeline },
-          state,
-        );
-        return child.executeCommand(command, "");
-      },
-    );
-    let index = 0;
-    return executePipelineHelper(
-      this.ctx,
-      node,
-      (cmd, stdin) =>
-        streamed
-          ? Promise.resolve(streamed[index++])
-          : this.executeCommand(cmd, stdin),
-      streamed !== null,
+    return executePipelineHelper(this.ctx, node, (cmd, stdin) =>
+      this.executeCommand(cmd, stdin),
     );
   }
 

@@ -222,29 +222,6 @@ export function createDefenseAwareCommandContext(
     descriptors,
   ) as RuntimeCommandContext;
 
-  if (ctx.pipeline) {
-    wrappedCtx.pipeline = {
-      checkpoint: wrapFunction(
-        ctx.pipeline.checkpoint.bind(ctx.pipeline),
-        ctx.requireDefenseContext,
-        component,
-        "pipeline.checkpoint",
-      ),
-      read: wrapFunction(
-        ctx.pipeline.read.bind(ctx.pipeline),
-        ctx.requireDefenseContext,
-        component,
-        "pipeline.read",
-      ),
-      write: wrapFunction(
-        ctx.pipeline.write.bind(ctx.pipeline),
-        ctx.requireDefenseContext,
-        component,
-        "pipeline.write",
-      ),
-    };
-  }
-
   if (ctx.exec) {
     wrappedCtx.exec = wrapFunction(
       ctx.exec,

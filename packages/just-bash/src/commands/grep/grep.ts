@@ -1,4 +1,4 @@
-import { decodeBytesToUtf8, encodeUtf8ToBytes } from "../../encoding.js";
+import { decodeBytesToUtf8 } from "../../encoding.js";
 import { rethrowFatalExecutionError } from "../../fatal-execution-error.js";
 import { ExecutionLimitError } from "../../interpreter/errors.js";
 import type { UserRegex } from "../../regex/index.js";
@@ -9,7 +9,6 @@ import type {
 } from "../../types.js";
 import { matchGlob } from "../../utils/glob.js";
 import { showHelp, unknownOption } from "../help.js";
-import { readStdin, stdinLines } from "../pipeline-input.js";
 import {
   buildRegex,
   type RegexMode,
@@ -384,9 +383,7 @@ export const grepCommand: RuntimeCommand = {
       if (patternFile === "-") {
         // stdin is a stream: the first `-f -` drains it, any later one reads
         // EOF and contributes nothing.
-        content = stdinUsedForPatterns
-          ? ""
-          : decodeBytesToUtf8(await readStdin(ctx));
+        content = stdinUsedForPatterns ? "" : decodeBytesToUtf8(ctx.stdin);
         stdinUsedForPatterns = true;
       } else {
         try {
@@ -492,59 +489,11 @@ export const grepCommand: RuntimeCommand = {
       };
     }
 
-    if (
-      ctx.pipeline &&
-      files.length === 0 &&
-      !stdinUsedForPatterns &&
-      !countOnly &&
-      !onlyMatching &&
-      !beforeContext &&
-      !afterContext &&
-      !quietMode &&
-      !showLineNumbers &&
-      maxCount === 0 &&
-      !filesWithMatches &&
-      !filesWithoutMatch
-    ) {
-      let matched = false;
-      let records = 0;
-      let matches = 0;
-      const workBudget = { used: 0 };
-      for await (const line of stdinLines(ctx)) {
-        if (++records > ctx.limits.maxArrayElements)
-          throw new ExecutionLimitError(
-            `grep: array element limit exceeded (${ctx.limits.maxArrayElements})`,
-            "array_elements",
-          );
-        const result = searchContent(`${line.text}\n`, regex, {
-          invertMatch,
-          kResetGroup,
-          preFilter,
-          maxWork: getMatcherWorkLimit(ctx),
-          workBudget,
-          maxMatches: ctx.limits.maxArrayElements,
-          signal: ctx.signal,
-        });
-        if (result.matched) {
-          if (++matches > ctx.limits.maxArrayElements)
-            throw new ExecutionLimitError(
-              "grep: array element limit exceeded",
-              "array_elements",
-            );
-          matched = true;
-          await ctx.pipeline.write(encodeUtf8ToBytes(result.output), true);
-        }
-      }
-      return { stdout: "", stderr: "", exitCode: matched ? 0 : 1 };
-    }
-
     // If no files and stdin is provided (including empty string), read from
     // stdin. grep runs regex over text — decode bytes to UTF-8 so multibyte
     // codepoints match `.` / character classes correctly.
     if (files.length === 0 && ctx.stdin !== undefined) {
-      const input = stdinUsedForPatterns
-        ? ""
-        : decodeBytesToUtf8(await readStdin(ctx));
+      const input = stdinUsedForPatterns ? "" : decodeBytesToUtf8(ctx.stdin);
       const result = searchContent(input, regex, {
         invertMatch,
         showLineNumbers,
@@ -725,7 +674,7 @@ export const grepCommand: RuntimeCommand = {
               content =
                 fileEntry.stdinAtEof || ctx.stdin === undefined
                   ? ""
-                  : decodeBytesToUtf8(await readStdin(ctx));
+                  : decodeBytesToUtf8(ctx.stdin);
             } else {
               const filePath = ctx.fs.resolvePath(ctx.cwd, file);
 

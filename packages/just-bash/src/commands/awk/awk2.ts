@@ -1,6 +1,3 @@
-import { encodeUtf8ToBytes } from "../../encoding.js";
-import { PipelineClosedError } from "../../interpreter/errors.js";
-import { stdinLines } from "../pipeline-input.js";
 /**
  * AWK RuntimeCommand - New AST-based Implementation
  *
@@ -320,63 +317,6 @@ export const awkCommand2: RuntimeCommand = {
           );
           if (runtimeCtx.shouldExit) break;
         }
-      } else if (ctx.pipeline) {
-        const pipeline = ctx.pipeline;
-        const lines = stdinLines(ctx);
-        runtimeCtx.FILENAME = "";
-        runtimeCtx.FNR = 0;
-        let records = 0;
-        const readNextLine = async () => {
-          const next = await withDefenseContext("streamed input", () =>
-            lines.next(),
-          );
-          if (next.done) return undefined;
-          if (++records > maxRecords) {
-            throw new ExecutionLimitError(
-              `record array limit exceeded (${maxRecords})`,
-              "array_elements",
-            );
-          }
-          aggregateInputBytes +=
-            utf8ByteLength(next.value.text) + (next.value.terminated ? 1 : 0);
-          if (aggregateInputBytes > maxInputBytes) {
-            throw new ExecutionLimitError(
-              `aggregate input size limit exceeded (${maxInputBytes} bytes)`,
-              "string_length",
-            );
-          }
-          return next.value.text;
-        };
-        runtimeCtx.readNextLine = readNextLine;
-        const flush = async () => {
-          const output = interp.getOutput();
-          if (output) {
-            await withDefenseContext("streamed output", () =>
-              pipeline.write(encodeUtf8ToBytes(output), true),
-            );
-            runtimeCtx.output = "";
-          }
-        };
-        try {
-          await withDefenseContext("flush streamed output", flush);
-          for (;;) {
-            const line = await withDefenseContext(
-              "streamed record",
-              readNextLine,
-            );
-            if (line === undefined) break;
-            await withDefenseContext("streamed line execution", () =>
-              interp.executeLine(line),
-            );
-            await withDefenseContext("flush streamed output", flush);
-            if (runtimeCtx.shouldExit || runtimeCtx.shouldNextFile) break;
-          }
-        } finally {
-          runtimeCtx.readNextLine = undefined;
-          await withDefenseContext("close streamed input", () =>
-            lines.return(undefined),
-          );
-        }
       } else {
         // awk parses fields with regex / FS — decode bytes to UTF-8 so
         // non-ASCII data isn't split mid-codepoint.
@@ -395,7 +335,6 @@ export const awkCommand2: RuntimeCommand = {
         exitCode: interp.getExitCode(),
       };
     } catch (e) {
-      if (e instanceof PipelineClosedError) throw e;
       if (e instanceof SecurityViolationError) {
         throw e;
       }
