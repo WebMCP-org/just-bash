@@ -1,3 +1,5 @@
+import { validateReadRange } from "../read-range.js";
+import { readHandleRange } from "../real-fs-utils.js";
 /**
  * OverlayFs - Copy-on-write filesystem backed by a real directory
  *
@@ -453,9 +455,26 @@ export class OverlayFs implements IFileSystem {
     return unsafeBytesFromLatin1(fromBuffer(buffer, "binary"));
   }
 
+  async readFileRange(
+    path: string,
+    offset: number,
+    length: number,
+  ): Promise<Uint8Array> {
+    validateReadRange(offset, length);
+    return this.readBuffer(path, new Set(), { offset, length });
+  }
+
   async readFileBuffer(
     path: string,
     seen: Set<string> = new Set(),
+  ): Promise<Uint8Array> {
+    return this.readBuffer(path, seen);
+  }
+
+  private async readBuffer(
+    path: string,
+    seen: Set<string>,
+    range?: { offset: number; length: number },
   ): Promise<Uint8Array> {
     validatePath(path, "open");
     const normalized = normalizePath(path);
@@ -478,7 +497,7 @@ export class OverlayFs implements IFileSystem {
     if (memEntry) {
       if (memEntry.type === "symlink") {
         const target = this.resolveSymlink(normalized, memEntry.target);
-        return this.readFileBuffer(target, seen);
+        return this.readBuffer(target, seen, range);
       }
       if (memEntry.type !== "file") {
         throw new Error(
@@ -486,7 +505,9 @@ export class OverlayFs implements IFileSystem {
         );
       }
       if (!memEntry.appendChunks || memEntry.appendChunks.length === 0) {
-        return memEntry.content;
+        return range
+          ? memEntry.content.slice(range.offset, range.offset + range.length)
+          : memEntry.content;
       }
       const total = memEntry.appendChunks.reduce(
         (sum, chunk) => sum + chunk.byteLength,
@@ -504,7 +525,9 @@ export class OverlayFs implements IFileSystem {
       }
       memEntry.content = combined;
       memEntry.appendChunks = undefined;
-      return combined;
+      return range
+        ? combined.slice(range.offset, range.offset + range.length)
+        : combined;
     }
 
     // Fall back to real filesystem.  Use the canonical path for I/O to
@@ -523,7 +546,7 @@ export class OverlayFs implements IFileSystem {
         const rawTarget = await fs.promises.readlink(canonical);
         const virtualTarget = this.realTargetToVirtual(normalized, rawTarget);
         const resolvedTarget = this.resolveSymlink(normalized, virtualTarget);
-        return this.readFileBuffer(resolvedTarget, seen);
+        return this.readBuffer(resolvedTarget, seen, range);
       }
       if (stat.isDirectory()) {
         throw new Error(
@@ -543,6 +566,7 @@ export class OverlayFs implements IFileSystem {
         : fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
       const fh = await fs.promises.open(canonical, flags);
       try {
+        if (range) return await readHandleRange(fh, range.offset, range.length);
         const content = await fh.readFile();
         return new Uint8Array(content);
       } finally {

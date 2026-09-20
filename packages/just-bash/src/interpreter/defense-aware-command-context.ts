@@ -52,6 +52,16 @@ function wrapFileSystem(
   component: string,
 ): RuntimeCommandContext["fs"] {
   const wrappedFs: RuntimeCommandContext["fs"] = {
+    ...(fs.readFileRange
+      ? {
+          readFileRange: wrapFunction(
+            fs.readFileRange.bind(fs),
+            requireDefenseContext,
+            component,
+            "fs.readFileRange",
+          ),
+        }
+      : (Object.create(null) as Record<string, never>)),
     readFile: wrapFunction(
       fs.readFile.bind(fs),
       requireDefenseContext,
@@ -211,6 +221,29 @@ export function createDefenseAwareCommandContext(
     Object.create(Object.getPrototypeOf(ctx)),
     descriptors,
   ) as RuntimeCommandContext;
+
+  if (ctx.pipeline) {
+    wrappedCtx.pipeline = {
+      checkpoint: wrapFunction(
+        ctx.pipeline.checkpoint.bind(ctx.pipeline),
+        ctx.requireDefenseContext,
+        component,
+        "pipeline.checkpoint",
+      ),
+      read: wrapFunction(
+        ctx.pipeline.read.bind(ctx.pipeline),
+        ctx.requireDefenseContext,
+        component,
+        "pipeline.read",
+      ),
+      write: wrapFunction(
+        ctx.pipeline.write.bind(ctx.pipeline),
+        ctx.requireDefenseContext,
+        component,
+        "pipeline.write",
+      ),
+    };
+  }
 
   if (ctx.exec) {
     wrappedCtx.exec = wrapFunction(

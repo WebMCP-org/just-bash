@@ -282,3 +282,6 @@ export class PosixFatalError extends ControlFlowError {
     super("posix fatal error", stdout, stderr);
   }
 }
+
+/** A pipeline consumer closed its input, corresponding to SIGPIPE (141). */
+export class PipelineClosedError extends Error {}

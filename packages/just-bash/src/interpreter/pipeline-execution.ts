@@ -33,6 +33,7 @@ export async function executePipeline(
   ctx: InterpreterContext,
   node: PipelineNode,
   executeCommand: ExecuteCommandFn,
+  commandsAlreadyCharged = false,
 ): Promise<ExecResult> {
   // Record start time for timed pipelines
   const startTime = node.timed ? _performanceNow() : 0;
@@ -93,7 +94,8 @@ export async function executePipeline(
     let result: ExecResult;
     const outputCheckpoint = ctx.executionScope.outputBytesUsed;
     try {
-      ctx.state.commandCount = ctx.executionScope.chargeCommand();
+      if (!commandsAlreadyCharged)
+        ctx.state.commandCount = ctx.executionScope.chargeCommand();
       result = await executeCommand(command, stdin);
     } catch (error) {
       // BadSubstitutionError should fail the command but not abort the script

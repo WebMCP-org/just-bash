@@ -1,0 +1,38 @@
+{
+  "170a85d67201bca8": {
+    "command": "tail -c 12 input | head -c 5",
+    "files": {
+      "input": "alpha\nbeta\ngamma\ndelta\n"
+    },
+    "stdout": "gamma",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "720797076d5c48af": {
+    "command": "head -c 100 input | sed 'H;g' | awk 'length($0) {print ++n, $0}' | grep -E 'alpha|beta' | head -n 4",
+    "files": {
+      "input": "alpha\nbeta\ngamma\ndelta\n"
+    },
+    "stdout": "1 alpha\n2 alpha\n3 beta\n4 alpha\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "8a645064bf331c77": {
+    "command": "head -c 100 input | grep -A1 -B1 gamma | head -n 10",
+    "files": {
+      "input": "alpha\nbeta\ngamma\ndelta\n"
+    },
+    "stdout": "beta\ngamma\ndelta\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "b35b099292bf12bd": {
+    "command": "head -c 100 input | sed 'N;s/\\n/:/' | awk '{ print NR, $0 } END {print NR}' | head -n 10",
+    "files": {
+      "input": "alpha\nbeta\ngamma\ndelta\n"
+    },
+    "stdout": "1 alpha:beta\n2 gamma:delta\n2\n",
+    "stderr": "",
+    "exitCode": 0
+  }
+}

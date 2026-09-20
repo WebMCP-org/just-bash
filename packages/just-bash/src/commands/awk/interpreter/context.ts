@@ -50,6 +50,7 @@ export interface AwkRuntimeContext {
   functions: Map<string, AwkFunctionDef>;
 
   // For getline support (current file)
+  readNextLine?: () => Promise<string | undefined>;
   lines?: string[];
   lineIndex?: number;
   /** Internal getline streams, isolated from the AWK variable namespace. */

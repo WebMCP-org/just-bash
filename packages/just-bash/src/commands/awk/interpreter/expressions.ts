@@ -670,17 +670,18 @@ async function evalGetline(
     return evalGetlineFromFile(ctx, variable, file);
   }
 
-  // Plain getline - read from current input
-  if (!ctx.lines || ctx.lineIndex === undefined) {
-    return -1;
+  // Plain getline shares the same cursor as the main record loop.
+  let nextLine: string | undefined;
+  let nextLineIndex = ctx.lineIndex;
+  const readNextLine = ctx.readNextLine;
+  if (readNextLine)
+    nextLine = await withDefenseContext(ctx, "streamed getline", readNextLine);
+  else {
+    if (!ctx.lines || ctx.lineIndex === undefined) return -1;
+    nextLineIndex = ctx.lineIndex + 1;
+    nextLine = ctx.lines[nextLineIndex];
   }
-
-  const nextLineIndex = ctx.lineIndex + 1;
-  if (nextLineIndex >= ctx.lines.length) {
-    return 0; // No more lines
-  }
-
-  const nextLine = ctx.lines[nextLineIndex];
+  if (nextLine === undefined) return 0;
 
   if (variable) {
     setVariable(ctx, variable, nextLine);

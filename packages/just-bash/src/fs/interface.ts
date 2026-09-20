@@ -159,6 +159,17 @@ export interface IFileSystem {
   readFileBuffer(path: string): Promise<Uint8Array>;
 
   /**
+   * Read at most length bytes starting at offset, without decoding text.
+   * Both numbers must be nonnegative safe integers; reads past EOF are empty.
+   * Optional for older external filesystems; built-in adapters preserve it.
+   */
+  readFileRange?(
+    path: string,
+    offset: number,
+    length: number,
+  ): Promise<Uint8Array>;
+
+  /**
    * Write content to a file, creating it if it doesn't exist
    */
   writeFile(

@@ -543,6 +543,9 @@ const cache = new Map<string, RuntimeCommand>();
 function createLazyCommand(def: LazyCommandDef): RuntimeCommand {
   return {
     name: def.name,
+    internalSupportsStreaming: ["head", "tail", "sed", "awk", "grep"].includes(
+      def.name,
+    ),
     async execute(
       args: string[],
       ctx: RuntimeCommandContext,

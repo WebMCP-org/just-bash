@@ -1,3 +1,4 @@
+import type { PipelineIO } from "../types.js";
 /**
  * Interpreter Types
  */
@@ -460,6 +461,7 @@ export interface ShellArray {
 }
 
 export interface InterpreterContext {
+  pipeline?: PipelineIO;
   state: InterpreterState;
   fs: IFileSystem;
   commands: CommandRegistry;

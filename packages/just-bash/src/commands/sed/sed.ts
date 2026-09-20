@@ -1,6 +1,9 @@
-import { decodeBytesToUtf8 } from "../../encoding.js";
+import { decodeBytesToUtf8, encodeUtf8ToBytes } from "../../encoding.js";
 import { sanitizeErrorMessage } from "../../fs/sanitize-error.js";
-import { ExecutionLimitError } from "../../interpreter/errors.js";
+import {
+  ExecutionLimitError,
+  PipelineClosedError,
+} from "../../interpreter/errors.js";
 import type { ExecutionLimits } from "../../limits.js";
 import {
   assertDefenseContext,
@@ -14,6 +17,7 @@ import type {
   RuntimeCommandContext,
 } from "../../types.js";
 import { hasHelpFlag, showHelp, unknownOption } from "../help.js";
+import { readStdin } from "../pipeline-input.js";
 import {
   createInitialState,
   type ExecuteContext,
@@ -72,6 +76,8 @@ Addresses:
 };
 
 interface ProcessContentOptions {
+  checkpoint?: () => Promise<void>;
+  writeOutput?: (text: string) => Promise<void>;
   limits?: Required<ExecutionLimits>;
   filename?: string;
   fs?: RuntimeCommandContext["fs"];
@@ -105,6 +111,7 @@ async function processContent(
 
   const totalLines = lines.length;
   let output = "";
+  let outputSize = 0;
   let exitCode: number | undefined;
   // Track if the last output came from auto-print (to determine trailing newline behavior)
   // Only auto-print should have its trailing newline stripped when input has no trailing newline
@@ -114,7 +121,8 @@ async function processContent(
   const maxOutputSize = limits?.maxStringLength ?? 0;
   const appendOutput = (text: string): void => {
     output += text;
-    if (maxOutputSize > 0 && output.length > maxOutputSize) {
+    outputSize += text.length;
+    if (maxOutputSize > 0 && outputSize > maxOutputSize) {
       throw new ExecutionLimitError(
         `sed: output size limit exceeded (${maxOutputSize} bytes)`,
         "string_length",
@@ -141,6 +149,8 @@ async function processContent(
     : undefined;
 
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    if (options.checkpoint)
+      await withDefenseContext("pipeline checkpoint", options.checkpoint);
     const state: SedState = {
       ...createInitialState(totalLines, filename, rangeStates),
       patternSpace: lines[lineIndex],
@@ -207,6 +217,7 @@ async function processContent(
               }
             }
           } catch (e) {
+            if (e instanceof PipelineClosedError) throw e;
             if (e instanceof SecurityViolationError) {
               throw e;
             }
@@ -294,6 +305,20 @@ async function processContent(
     const hadOutput = hadLineNumberOutput || hadPatternSpaceOutput;
     lastOutputWasAutoPrint = hadOutput && appends.length === 0;
 
+    if (options.writeOutput && output) {
+      if (
+        !inputEndsWithNewline &&
+        lastOutputWasAutoPrint &&
+        (lineIndex >= lines.length - 1 || state.quit || state.quitSilent) &&
+        output.endsWith("\n")
+      ) {
+        output = output.slice(0, -1);
+      }
+      const writeOutput = options.writeOutput;
+      await withDefenseContext("streamed output", () => writeOutput(output));
+      output = "";
+    }
+
     // Check for quit commands or errors
     if (state.quit || state.quitSilent) {
       if (state.exitCode !== undefined) {
@@ -319,6 +344,7 @@ async function processContent(
           fs.writeFile(filePath, fileContent),
         );
       } catch (e) {
+        if (e instanceof PipelineClosedError) throw e;
         if (e instanceof SecurityViolationError) {
           throw e;
         }
@@ -440,6 +466,7 @@ export const sedCommand: RuntimeCommand = {
           }
         }
       } catch (e) {
+        if (e instanceof PipelineClosedError) throw e;
         if (e instanceof SecurityViolationError) {
           throw e;
         }
@@ -520,6 +547,7 @@ export const sedCommand: RuntimeCommand = {
             ctx.fs.writeFile(filePath, result.output),
           );
         } catch (e) {
+          if (e instanceof PipelineClosedError) throw e;
           if (e instanceof SecurityViolationError) {
             throw e;
           }
@@ -541,16 +569,23 @@ export const sedCommand: RuntimeCommand = {
       return { stdout: "", stderr: "", exitCode: 0 };
     }
 
+    const pipeline = ctx.pipeline;
     let content = "";
 
     // Read from files or stdin. sed runs regex over text — decode bytes to
     // UTF-8 so multibyte sequences match as single chars rather than several
     // latin1 bytes.
     if (files.length === 0) {
-      content = decodeBytesToUtf8(ctx.stdin);
+      content = decodeBytesToUtf8(
+        await withDefenseContext("streamed input", () => readStdin(ctx)),
+      );
       try {
         const result = await withDefenseContext("stdin processing", () =>
           processContent(content, commands, effectiveSilent, {
+            checkpoint: pipeline?.checkpoint,
+            writeOutput: pipeline
+              ? (text) => pipeline.write(encodeUtf8ToBytes(text), true)
+              : undefined,
             limits: ctx.limits,
             fs: ctx.fs,
             cwd: ctx.cwd,
@@ -565,6 +600,7 @@ export const sedCommand: RuntimeCommand = {
           exitCode: result.exitCode ?? 0,
         };
       } catch (e) {
+        if (e instanceof PipelineClosedError) throw e;
         if (e instanceof SecurityViolationError) {
           throw e;
         }
@@ -590,7 +626,9 @@ export const sedCommand: RuntimeCommand = {
         if (stdinConsumed) {
           fileContent = "";
         } else {
-          fileContent = decodeBytesToUtf8(ctx.stdin);
+          fileContent = decodeBytesToUtf8(
+            await withDefenseContext("streamed input", () => readStdin(ctx)),
+          );
           stdinConsumed = true;
         }
       } else {
@@ -600,6 +638,7 @@ export const sedCommand: RuntimeCommand = {
             ctx.fs.readFile(filePath),
           );
         } catch (e) {
+          if (e instanceof PipelineClosedError) throw e;
           if (e instanceof SecurityViolationError) {
             throw e;
           }
