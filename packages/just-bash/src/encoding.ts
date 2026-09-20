@@ -148,10 +148,15 @@ export function bytesFromUint8Array(
   assertConversionSize(buf.byteLength, maxBytes, "byte-string conversion");
   // Per-byte concatenation creates a rope node for every byte. Batch the
   // conversion without exceeding the engine's function-argument limit.
+  // Apply reads the typed array directly, avoiding spread's iterator overhead.
   const chunkSize = 32768;
   let out = "";
   for (let i = 0; i < buf.length; i += chunkSize) {
-    out += String.fromCharCode(...buf.subarray(i, i + chunkSize));
+    out += Reflect.apply(
+      String.fromCharCode,
+      null,
+      buf.subarray(i, i + chunkSize),
+    );
   }
   return out as unknown as ByteString;
 }
