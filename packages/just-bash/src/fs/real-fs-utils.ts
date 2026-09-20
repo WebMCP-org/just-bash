@@ -264,32 +264,3 @@ export function sanitizeFsError(
   const code = err.code || "EIO";
   throw new Error(`${code}: ${operation} '${virtualPath}'`);
 }
-
-/** Read a bounded range from an already validated, open file. */
-export async function readHandleRange(
-  handle: fs.promises.FileHandle,
-  offset: number,
-  length: number,
-): Promise<Uint8Array> {
-  const stat = await handle.stat();
-  if (stat.isDirectory()) {
-    throw Object.assign(new Error("EISDIR: illegal operation on a directory"), {
-      code: "EISDIR",
-    });
-  }
-  const bytes = new Uint8Array(
-    Math.min(length, Math.max(0, stat.size - offset)),
-  );
-  let read = 0;
-  while (read < bytes.byteLength) {
-    const { bytesRead } = await handle.read(
-      bytes,
-      read,
-      bytes.byteLength - read,
-      offset + read,
-    );
-    if (bytesRead === 0) break;
-    read += bytesRead;
-  }
-  return bytes.subarray(0, read);
-}

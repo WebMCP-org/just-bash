@@ -1,4 +1,3 @@
-import { PipelineClosedError } from "./errors.js";
 /**
  * Builtin Command Dispatch
  *
@@ -831,7 +830,6 @@ export async function executeExternalCommand(
   // this invocation has not created any extra descriptors yet.
   ctx.state.fileDescriptors ??= new Map();
   const cmdCtx: RuntimeCommandContext = {
-    pipeline: ctx.pipeline,
     fs: ctx.fs,
     fsIdentity: getFileSystemIdentity(ctx.fs),
     cwd: ctx.state.cwd,
@@ -987,7 +985,6 @@ export async function executeExternalCommand(
         (stdinAccessed ? stdin.length : 0),
     };
   } catch (error) {
-    if (error instanceof PipelineClosedError) throw error;
     // ExecutionLimitError must propagate - these are safety limits
     if (error instanceof ExecutionLimitError) {
       throw error;

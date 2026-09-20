@@ -147,21 +147,7 @@ export interface TraceEvent {
  */
 export type TraceCallback = (event: TraceEvent) => void;
 
-export interface PipelineChunk {
-  bytes: ByteString;
-  /** True for UTF-8 text producers; chunk boundaries may split codepoints. */
-  utf8: boolean;
-}
-
-export interface PipelineIO {
-  checkpoint(): Promise<void>;
-  read(): Promise<PipelineChunk | null>;
-  write(bytes: ByteString, utf8?: boolean): Promise<void>;
-}
-
 export interface RuntimeCommandContext {
-  /** @internal Bounded pipeline transport, valid only during execute(). */
-  pipeline?: PipelineIO;
   /** Virtual filesystem interface for file operations */
   fs: IFileSystem;
   /** Stable identity of the underlying filesystem across defense wrappers. */
@@ -318,8 +304,6 @@ export interface Command {
 }
 
 export interface RuntimeCommand extends Omit<Command, "execute"> {
-  /** @internal Bundled commands that consume PipelineIO. */
-  internalSupportsStreaming?: boolean;
   /** @internal Bundled command shadowed by this host extension. */
   internalOriginalCommand?: RuntimeCommand;
   execute(args: string[], ctx: RuntimeCommandContext): Promise<ExecResult>;

@@ -37,7 +37,6 @@ import {
   SYMLINK_MODE,
   validatePath,
 } from "../path-utils.js";
-import { validateReadRange } from "../read-range.js";
 
 // Re-export for backwards compatibility
 export type {
@@ -330,15 +329,6 @@ export class InMemoryFs implements IFileSystem {
   async readFileBytes(path: string): Promise<ByteString> {
     const buffer = await this.readFileBuffer(path);
     return unsafeBytesFromLatin1(fromBuffer(buffer, "binary"));
-  }
-
-  async readFileRange(
-    path: string,
-    offset: number,
-    length: number,
-  ): Promise<Uint8Array> {
-    validateReadRange(offset, length);
-    return (await this.readFileBuffer(path)).slice(offset, offset + length);
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {

@@ -673,24 +673,6 @@ override the selected profile; non-negative safe integers and the legacy
 platform timer rather than overflowing it. Invalid values are rejected when
 `Bash` is constructed. Error messages identify the resource that was hit.
 
-`head -c` and `tail -c` use the optional `IFileSystem.readFileRange` capability.
-Offsets and lengths are nonnegative safe integers; reads stop at EOF. Native
-filesystems retain their existing path, symlink and file-size checks. Older
-custom filesystems still work through a whole-file fallback, guarded by the
-full-file input budget even through nested mounts. The shared input budget
-counts all bytes consumed, not just the slice returned by a fallback.
-
-Simple pipelines of bundled `head`, `tail`, `sed`, `awk` and `grep` use bounded
-streams, isolated shell state and downstream cancellation. Shell compositions
-with redirections, substitutions, functions, aliases, `lastpipe` or `|&` retain
-the general executor. Unknown binary input is buffered at the first text decoder
-to preserve invalid-UTF-8 fallback. Sed buffers its input before emitting cycles,
-so cancellation stops its later processing but not that initial read. Grep
-context/count modes also retain buffered parsing. AWK records and ordinary grep matches can flow to a
-consumer before the entire input is processed. Existing work, output, memory
-and deadline limits still apply; early pipe closure reports status 141 to
-`pipefail`.
-
 ## Security Model
 
 The Node.js package requires Node `>=20.18.1`.

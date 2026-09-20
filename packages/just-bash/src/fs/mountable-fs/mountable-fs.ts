@@ -19,7 +19,6 @@ import {
   resolvePath,
   validatePath,
 } from "../path-utils.js";
-import { readRangeFrom } from "../read-range.js";
 
 /**
  * Configuration for a mount point
@@ -264,15 +263,6 @@ export class MountableFs implements IFileSystem {
   async readFileBuffer(path: string): Promise<Uint8Array> {
     const { fs, relativePath } = this.routePath(path);
     return fs.readFileBuffer(relativePath);
-  }
-
-  async readFileRange(
-    path: string,
-    offset: number,
-    length: number,
-  ): Promise<Uint8Array> {
-    const { fs, relativePath } = this.routePath(path);
-    return readRangeFrom(fs, relativePath, offset, length);
   }
 
   async writeFile(

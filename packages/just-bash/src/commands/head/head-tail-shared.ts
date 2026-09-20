@@ -1,21 +1,14 @@
-import { unsafeBytesFromLatin1 } from "../../encoding.js";
-import { readStdin } from "../pipeline-input.js";
 /**
  * Shared utilities for head and tail commands.
  */
 
 import { BoundedStringBuilder } from "../../bounded-builder.js";
 import {
-  bytesFromUint8Array,
   encodeUtf8ToBytes,
   latin1FromBytes,
   readBytesFrom,
 } from "../../encoding.js";
 import { rethrowFatalExecutionError } from "../../fatal-execution-error.js";
-import {
-  RangeReadUnsupportedError,
-  readRangeFrom,
-} from "../../fs/read-range.js";
 import { ExecutionLimitError } from "../../interpreter/errors.js";
 import type { ExecResult, RuntimeCommandContext } from "../../types.js";
 import { unknownOption } from "../help.js";
@@ -140,29 +133,9 @@ export async function processHeadTailFiles(
   // If no files, read from stdin. head/tail are byte-clean: `\n` splits and
   // `-c` byte slices are byte-safe over the latin1 view, and the output is
   // marked binary so the pipeline glue / redirects don't UTF-8 re-encode it.
-  if (files.length === 0 && ctx.pipeline && cmdName === "head") {
-    let remaining = options.bytes ?? options.lines;
-    while (remaining > 0) {
-      const chunk = await ctx.pipeline.read();
-      if (chunk === null) break;
-      const content = latin1FromBytes(chunk.bytes);
-      const selected = getHead(
-        content,
-        remaining,
-        options.bytes === null ? null : remaining,
-      );
-      if (options.bytes !== null) remaining -= selected.length;
-      else {
-        for (let i = 0; i < selected.length; i++)
-          if (selected.charCodeAt(i) === 10) remaining--;
-      }
-      await ctx.pipeline.write(unsafeBytesFromLatin1(selected));
-    }
-    return { stdout: "", stderr: "", exitCode: 0, stdoutEncoding: "binary" };
-  }
   if (files.length === 0) {
     return {
-      stdout: contentProcessor(latin1FromBytes(await readStdin(ctx))),
+      stdout: contentProcessor(latin1FromBytes(ctx.stdin)),
       stderr: "",
       exitCode: 0,
       stdoutEncoding: "binary",
@@ -189,15 +162,7 @@ export async function processHeadTailFiles(
     try {
       const filePath = ctx.fs.resolvePath(ctx.cwd, file);
       const stat = await ctx.fs.stat(filePath);
-      // Host pseudo-files may report size zero while still containing data.
-      const rangeLength =
-        options.bytes !== null &&
-        stat.isFile &&
-        (stat.size > 0 || options.bytes === 0)
-          ? Math.min(options.bytes, stat.size)
-          : null;
-      const inputSize = rangeLength ?? stat.size;
-      if (inputSize > ctx.limits.maxInputBytes - aggregateInput) {
+      if (stat.size > ctx.limits.maxInputBytes - aggregateInput) {
         throw new ExecutionLimitError(
           `${cmdName}: aggregate input size limit exceeded (${ctx.limits.maxInputBytes} bytes)`,
           "string_length",
@@ -206,30 +171,7 @@ export async function processHeadTailFiles(
       // Read the raw bytes (latin1 view) rather than `fs.readFile`'s UTF-8
       // decode: `-c` byte counts and binary content must round-trip exactly.
       // Matches the stdin path above and `cat`'s byte-clean behaviour.
-      let range: Uint8Array | undefined;
-      if (rangeLength !== null) {
-        try {
-          range = await readRangeFrom(
-            ctx.fs,
-            filePath,
-            cmdName === "head" ? 0 : stat.size - rangeLength,
-            rangeLength,
-          );
-        } catch (error) {
-          if (!(error instanceof RangeReadUnsupportedError)) throw error;
-        }
-      }
-      if (!range && stat.size > ctx.limits.maxInputBytes - aggregateInput) {
-        throw new ExecutionLimitError(
-          `${cmdName}: aggregate input size limit exceeded (${ctx.limits.maxInputBytes} bytes)`,
-          "string_length",
-        );
-      }
-      const content = latin1FromBytes(
-        range
-          ? bytesFromUint8Array(range)
-          : await readBytesFrom(ctx.fs, filePath),
-      );
+      const content = latin1FromBytes(await readBytesFrom(ctx.fs, filePath));
       if (content.length > ctx.limits.maxInputBytes - aggregateInput) {
         throw new ExecutionLimitError(
           `${cmdName}: aggregate input size limit exceeded (${ctx.limits.maxInputBytes} bytes)`,

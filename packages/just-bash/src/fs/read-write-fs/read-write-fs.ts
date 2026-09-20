@@ -1,5 +1,3 @@
-import { validateReadRange } from "../read-range.js";
-import { readHandleRange } from "../real-fs-utils.js";
 /**
  * ReadWriteFs - Direct wrapper around the real filesystem
  *
@@ -167,23 +165,7 @@ export class ReadWriteFs implements IFileSystem {
     return unsafeBytesFromLatin1(fromBuffer(buffer, "binary"));
   }
 
-  async readFileRange(
-    path: string,
-    offset: number,
-    length: number,
-  ): Promise<Uint8Array> {
-    validateReadRange(offset, length);
-    return this.readBuffer(path, { offset, length });
-  }
-
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    return this.readBuffer(path);
-  }
-
-  private async readBuffer(
-    path: string,
-    range?: { offset: number; length: number },
-  ): Promise<Uint8Array> {
     validatePath(path, "open");
     const realPath = this.toRealPath(path);
     const canonical = this.resolveAndValidate(realPath, path);
@@ -206,7 +188,6 @@ export class ReadWriteFs implements IFileSystem {
             );
           }
         }
-        if (range) return await readHandleRange(fh, range.offset, range.length);
         const content = await fh.readFile();
         return new Uint8Array(content);
       } finally {

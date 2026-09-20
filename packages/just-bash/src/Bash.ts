@@ -557,8 +557,6 @@ export class Bash {
       name: command.name,
       trusted,
       internalIsExtension: isExtension,
-      internalSupportsStreaming:
-        !isExtension && (command as RuntimeCommand).internalSupportsStreaming,
       internalOriginalCommand: originalCommand,
       execute: (args, context) => command.execute(args, context),
     };
