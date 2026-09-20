@@ -325,11 +325,27 @@ export const awkCommand2: RuntimeCommand = {
         const lines = stdinLines(ctx);
         runtimeCtx.FILENAME = "";
         runtimeCtx.FNR = 0;
+        let records = 0;
         const readNextLine = async () => {
           const next = await withDefenseContext("streamed input", () =>
             lines.next(),
           );
-          return next.done ? undefined : next.value.text;
+          if (next.done) return undefined;
+          if (++records > maxRecords) {
+            throw new ExecutionLimitError(
+              `record array limit exceeded (${maxRecords})`,
+              "array_elements",
+            );
+          }
+          aggregateInputBytes +=
+            utf8ByteLength(next.value.text) + (next.value.terminated ? 1 : 0);
+          if (aggregateInputBytes > maxInputBytes) {
+            throw new ExecutionLimitError(
+              `aggregate input size limit exceeded (${maxInputBytes} bytes)`,
+              "string_length",
+            );
+          }
+          return next.value.text;
         };
         runtimeCtx.readNextLine = readNextLine;
         const flush = async () => {

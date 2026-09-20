@@ -1,7 +1,9 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { Bash } from "../../Bash.js";
 import { InMemoryFs } from "../../fs/in-memory-fs/in-memory-fs.js";
 import { MountableFs } from "../../fs/mountable-fs/mountable-fs.js";
+import { ReadWriteFs } from "../../fs/read-write-fs/read-write-fs.js";
 
 class RangeFileSystem extends InMemoryFs {
   readonly ranges: Array<{ path: string; offset: number; length: number }> = [];
@@ -59,4 +61,60 @@ describe("head/tail byte ranges", () => {
       "bash: tail: aggregate input size limit exceeded (8 bytes)\n",
     );
   });
+
+  it("guards legacy whole-file reads before allocation through nested mounts", async () => {
+    const legacy = new RangeFileSystem({ "/large.bin": "abcdefghijk" });
+    Object.defineProperty(legacy, "readFileRange", { value: undefined });
+    const nested = new MountableFs();
+    nested.mount("/legacy", legacy);
+    const fs = new MountableFs();
+    fs.mount("/mnt", nested);
+    for (const command of ["head", "tail"]) {
+      expect(
+        await new Bash({ fs, executionLimits: { maxInputBytes: 8 } }).exec(
+          `${command} -c 1 /mnt/legacy/large.bin`,
+        ),
+      ).toMatchObject({
+        stdout: "",
+        stderr: `bash: ${command}: aggregate input size limit exceeded (8 bytes)\n`,
+        exitCode: 126,
+      });
+    }
+  });
+
+  it("charges legacy fallback bytes instead of just the returned slice", async () => {
+    const legacy = new InMemoryFs({ "/data": "abcdef" });
+    Object.defineProperty(legacy, "readFileRange", { value: undefined });
+    const fs = new MountableFs();
+    fs.mount("/mnt", legacy);
+    expect(
+      await new Bash({ fs, executionLimits: { maxInputBytes: 8 } }).exec(
+        "head -c 1 /mnt/data; tail -c 1 /mnt/data",
+      ),
+    ).toMatchObject({
+      stdout: "a",
+      stderr: "bash: tail: aggregate input size limit exceeded (8 bytes)\n",
+      exitCode: 126,
+    });
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "reads host pseudo-files whose stat size is zero",
+    async () => {
+      const data = await readFile("/proc/version", "utf8");
+      const fs = new MountableFs();
+      fs.mount("/proc", new ReadWriteFs({ root: "/proc" }));
+      const bash = new Bash({ fs });
+      expect(await bash.exec("head -c 12 /proc/version")).toMatchObject({
+        stdout: data.slice(0, 12),
+        stderr: "",
+        exitCode: 0,
+      });
+      expect(await bash.exec("tail -c 12 /proc/version")).toMatchObject({
+        stdout: data.slice(-12),
+        stderr: "",
+        exitCode: 0,
+      });
+    },
+  );
 });

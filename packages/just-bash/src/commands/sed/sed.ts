@@ -576,6 +576,7 @@ export const sedCommand: RuntimeCommand = {
     // UTF-8 so multibyte sequences match as single chars rather than several
     // latin1 bytes.
     if (files.length === 0) {
+      // ponytail: retain the bounded whole-input parser; add lazy records if sed input buffering becomes the measured bottleneck.
       content = decodeBytesToUtf8(
         await withDefenseContext("streamed input", () => readStdin(ctx)),
       );

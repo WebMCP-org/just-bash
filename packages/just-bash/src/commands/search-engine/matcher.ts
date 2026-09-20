@@ -89,6 +89,8 @@ export interface SearchOptions {
   preFilter?: PreFilter | null;
   /** Maximum synchronous matching/formatting work units. */
   maxWork?: number;
+  /** Share command-wide work accounting across streamed input chunks. */
+  workBudget?: { used: number };
   /** Maximum retained match objects. */
   maxMatches?: number;
   /** Cooperative cancellation signal checked during long scans. */
@@ -140,6 +142,7 @@ export function searchContent(
     kResetGroup,
     preFilter,
     maxWork,
+    workBudget,
     maxMatches,
     signal,
   } = options;
@@ -163,16 +166,17 @@ export function searchContent(
       kResetGroup,
       preFilter,
       maxWork,
+      workBudget,
       maxMatches,
       signal,
     });
   }
 
-  let work = 0;
+  const work = workBudget ?? { used: 0 };
   const chargeWork = (amount = 1): void => {
     if (signal?.aborted) throw new ExecutionAbortedError();
-    work += amount;
-    if (maxWork !== undefined && work > maxWork) {
+    work.used += amount;
+    if (maxWork !== undefined && work.used > maxWork) {
       throw new ExecutionLimitError(
         `search: matching work limit exceeded (${maxWork})`,
         "iterations",
@@ -539,6 +543,7 @@ function searchContentMultiline(
     kResetGroup?: number;
     preFilter?: PreFilter | null;
     maxWork?: number;
+    workBudget?: { used: number };
     maxMatches?: number;
     signal?: AbortSignal;
   },
@@ -560,15 +565,16 @@ function searchContentMultiline(
     kResetGroup,
     preFilter,
     maxWork,
+    workBudget,
     maxMatches,
     signal,
   } = options;
 
-  let work = 0;
+  const work = workBudget ?? { used: 0 };
   const chargeWork = (amount = 1): void => {
     if (signal?.aborted) throw new ExecutionAbortedError();
-    work += amount;
-    if (maxWork !== undefined && work > maxWork) {
+    work.used += amount;
+    if (maxWork !== undefined && work.used > maxWork) {
       throw new ExecutionLimitError(
         `search: matching work limit exceeded (${maxWork})`,
         "iterations",

@@ -12,7 +12,13 @@ export function validateReadRange(offset: number, length: number): void {
   }
 }
 
-/** Keep older external filesystems working; native implementations avoid this full read. */
+/** Let the caller apply its full-file budget before using a legacy backend. */
+export class RangeReadUnsupportedError extends Error {
+  constructor() {
+    super("ENOTSUP: filesystem does not support byte ranges");
+  }
+}
+
 export async function readRangeFrom(
   fs: IFileSystem,
   path: string,
@@ -20,9 +26,8 @@ export async function readRangeFrom(
   length: number,
 ): Promise<Uint8Array> {
   validateReadRange(offset, length);
-  const bytes = fs.readFileRange
-    ? await fs.readFileRange(path, offset, length)
-    : (await fs.readFileBuffer(path)).slice(offset, offset + length);
+  if (!fs.readFileRange) throw new RangeReadUnsupportedError();
+  const bytes = await fs.readFileRange(path, offset, length);
   if (bytes.byteLength > length)
     throw new RangeError("EIO: byte range exceeded requested length");
   return bytes;

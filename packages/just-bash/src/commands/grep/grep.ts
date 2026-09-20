@@ -509,17 +509,19 @@ export const grepCommand: RuntimeCommand = {
       let matched = false;
       let records = 0;
       let matches = 0;
+      const workBudget = { used: 0 };
       for await (const line of stdinLines(ctx)) {
-        if (++records > getMatcherWorkLimit(ctx))
+        if (++records > ctx.limits.maxArrayElements)
           throw new ExecutionLimitError(
-            "grep: matcher work limit exceeded",
-            "iterations",
+            `grep: array element limit exceeded (${ctx.limits.maxArrayElements})`,
+            "array_elements",
           );
         const result = searchContent(`${line.text}\n`, regex, {
           invertMatch,
           kResetGroup,
           preFilter,
           maxWork: getMatcherWorkLimit(ctx),
+          workBudget,
           maxMatches: ctx.limits.maxArrayElements,
           signal: ctx.signal,
         });

@@ -67,6 +67,34 @@ it("supports getline on the same streamed AWK input cursor", async () => {
   ).toMatchObject({ stdout: "one two\nthree two\n", stderr: "", exitCode: 0 });
 });
 
+it("counts streamed AWK records including getline against the array limit", async () => {
+  const bash = new Bash({
+    files: { "/lines": "one\ntwo\nthree\n".repeat(2) },
+    executionLimits: { maxArrayElements: 5 },
+  });
+  for (const program of ["{}", "{ getline nextLine }"]) {
+    expect(
+      await bash.exec(`head -c 100 /lines | awk '${program}'`),
+    ).toMatchObject({
+      stdout: "",
+      stderr: "awk: record array limit exceeded (5)\n",
+      exitCode: 126,
+    });
+  }
+});
+
+it("keeps one grep matcher work budget across streamed lines", async () => {
+  const bash = new Bash({
+    files: { "/lines": "one\n".repeat(4) },
+    executionLimits: { maxArrayElements: 5, maxLoopIterations: 1 },
+  });
+  expect(await bash.exec("head -c100 /lines | grep absent")).toMatchObject({
+    stdout: "",
+    stderr: "bash: search: matching work limit exceeded (5)\n",
+    exitCode: 126,
+  });
+});
+
 it("yields to caller cancellation and releases blocked pipe stages", async () => {
   const bash = new Bash({ files: { "/lines": "one\n".repeat(50000) } });
   const controller = new AbortController();

@@ -12,7 +12,10 @@ import {
   readBytesFrom,
 } from "../../encoding.js";
 import { rethrowFatalExecutionError } from "../../fatal-execution-error.js";
-import { readRangeFrom } from "../../fs/read-range.js";
+import {
+  RangeReadUnsupportedError,
+  readRangeFrom,
+} from "../../fs/read-range.js";
 import { ExecutionLimitError } from "../../interpreter/errors.js";
 import type { ExecResult, RuntimeCommandContext } from "../../types.js";
 import { unknownOption } from "../help.js";
@@ -186,8 +189,13 @@ export async function processHeadTailFiles(
     try {
       const filePath = ctx.fs.resolvePath(ctx.cwd, file);
       const stat = await ctx.fs.stat(filePath);
+      // Host pseudo-files may report size zero while still containing data.
       const rangeLength =
-        options.bytes === null ? null : Math.min(options.bytes, stat.size);
+        options.bytes !== null &&
+        stat.isFile &&
+        (stat.size > 0 || options.bytes === 0)
+          ? Math.min(options.bytes, stat.size)
+          : null;
       const inputSize = rangeLength ?? stat.size;
       if (inputSize > ctx.limits.maxInputBytes - aggregateInput) {
         throw new ExecutionLimitError(
@@ -198,17 +206,29 @@ export async function processHeadTailFiles(
       // Read the raw bytes (latin1 view) rather than `fs.readFile`'s UTF-8
       // decode: `-c` byte counts and binary content must round-trip exactly.
       // Matches the stdin path above and `cat`'s byte-clean behaviour.
+      let range: Uint8Array | undefined;
+      if (rangeLength !== null) {
+        try {
+          range = await readRangeFrom(
+            ctx.fs,
+            filePath,
+            cmdName === "head" ? 0 : stat.size - rangeLength,
+            rangeLength,
+          );
+        } catch (error) {
+          if (!(error instanceof RangeReadUnsupportedError)) throw error;
+        }
+      }
+      if (!range && stat.size > ctx.limits.maxInputBytes - aggregateInput) {
+        throw new ExecutionLimitError(
+          `${cmdName}: aggregate input size limit exceeded (${ctx.limits.maxInputBytes} bytes)`,
+          "string_length",
+        );
+      }
       const content = latin1FromBytes(
-        rangeLength === null
-          ? await readBytesFrom(ctx.fs, filePath)
-          : bytesFromUint8Array(
-              await readRangeFrom(
-                ctx.fs,
-                filePath,
-                cmdName === "head" ? 0 : stat.size - rangeLength,
-                rangeLength,
-              ),
-            ),
+        range
+          ? bytesFromUint8Array(range)
+          : await readBytesFrom(ctx.fs, filePath),
       );
       if (content.length > ctx.limits.maxInputBytes - aggregateInput) {
         throw new ExecutionLimitError(
