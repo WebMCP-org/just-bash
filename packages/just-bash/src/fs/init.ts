@@ -12,7 +12,9 @@ import type { IFileSystem } from "./interface.js";
  * Interface for filesystems that support sync initialization
  * (both InMemoryFs and OverlayFs implement these)
  */
-interface SyncInitFs {
+export interface SyncInitFs {
+  /** Whether this path supports the requested synchronous initialization. */
+  supportsSyncInit?(path: string, operation: SyncInitOperation): boolean;
   mkdirSync(path: string, options?: { recursive?: boolean }): void;
   writeFileSync(path: string, content: string | Uint8Array): void;
   writeFileLazy?(
@@ -24,11 +26,14 @@ interface SyncInitFs {
 /**
  * Check if filesystem supports sync initialization
  */
-function isSyncInitFs(fs: IFileSystem): fs is IFileSystem & SyncInitFs {
-  const maybeFs = fs as unknown as Partial<SyncInitFs>;
+export type SyncInitOperation = "mkdirSync" | "writeFileSync" | "writeFileLazy";
+
+export function isSyncInitFs(fs: IFileSystem): fs is IFileSystem & SyncInitFs {
   return (
-    typeof maybeFs.mkdirSync === "function" &&
-    typeof maybeFs.writeFileSync === "function"
+    "mkdirSync" in fs &&
+    typeof fs.mkdirSync === "function" &&
+    "writeFileSync" in fs &&
+    typeof fs.writeFileSync === "function"
   );
 }
 
@@ -89,7 +94,10 @@ function initProcFiles(fs: SyncInitFs, processInfo: VirtualProcessInfo): void {
   fs.writeFileSync("/proc/self/exe", "/bin/bash");
   fs.writeFileSync("/proc/self/cmdline", "bash\0");
   fs.writeFileSync("/proc/self/comm", "bash\n");
-  if (fs.writeFileLazy) {
+  if (
+    fs.writeFileLazy &&
+    fs.supportsSyncInit?.("/proc/self/status", "writeFileLazy") !== false
+  ) {
     fs.writeFileLazy("/proc/self/status", () => formatProcStatus(processInfo));
   } else {
     fs.writeFileSync("/proc/self/status", formatProcStatus(processInfo));
@@ -112,8 +120,22 @@ export function initFilesystem(
 ): void {
   // Initialize for filesystems that support sync methods (InMemoryFs and OverlayFs)
   if (isSyncInitFs(fs)) {
-    initCommonDirectories(fs, useDefaultLayout);
-    initDevFiles(fs);
-    initProcFiles(fs, processInfo);
+    const supported: SyncInitFs = {
+      mkdirSync(path, options) {
+        if (fs.supportsSyncInit?.(path, "mkdirSync") !== false) {
+          fs.mkdirSync(path, options);
+        }
+      },
+      writeFileSync(path, content) {
+        if (fs.supportsSyncInit?.(path, "writeFileSync") !== false) {
+          fs.writeFileSync(path, content);
+        }
+      },
+      supportsSyncInit: fs.supportsSyncInit?.bind(fs),
+      writeFileLazy: fs.writeFileLazy?.bind(fs),
+    };
+    initCommonDirectories(supported, useDefaultLayout);
+    initDevFiles(supported);
+    initProcFiles(supported, processInfo);
   }
 }

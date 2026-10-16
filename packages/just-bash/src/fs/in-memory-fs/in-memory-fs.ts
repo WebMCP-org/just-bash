@@ -79,6 +79,7 @@ function isFileInit(
 }
 
 export class InMemoryFs implements IFileSystem {
+  readonly supportsGlobalSymlinks = true;
   private data: Map<string, FsEntry> = new Map();
   private entryIdentities = new WeakMap<FsEntry, string>();
   private nextEntryIdentity = 1;
