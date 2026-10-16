@@ -1,11 +1,14 @@
 import { type ByteString, readBytesFrom } from "../../encoding.js";
 import { InMemoryFs } from "../in-memory-fs/in-memory-fs.js";
+import { isSyncInitFs, type SyncInitOperation } from "../init.js";
 import type {
   BufferEncoding,
   CpOptions,
+  DirentEntry,
   FileContent,
   FsStat,
   IFileSystem,
+  LazyFileProvider,
   MkdirOptions,
   ReadFileOptions,
   RmOptions,
@@ -13,8 +16,10 @@ import type {
 } from "../interface.js";
 import {
   DEFAULT_DIR_MODE,
+  dirname,
   isSameOrDescendantPath,
   joinPath,
+  MAX_SYMLINK_DEPTH,
   normalizePath,
   resolvePath,
   validatePath,
@@ -39,6 +44,12 @@ export interface MountableFsOptions {
   base?: IFileSystem;
   /** Initial mounts to configure */
   mounts?: MountConfig[];
+  /**
+   * Symlink targets are mount-local by default. "global" resolves targets in
+   * the combined virtual namespace for backends with supportsGlobalSymlinks.
+   * Other backends retain their own symlink traversal policy in either mode.
+   */
+  symlinkNamespace?: "mount" | "global";
 }
 
 /**
@@ -65,10 +76,12 @@ interface MountEntry {
  */
 export class MountableFs implements IFileSystem {
   private baseFs: IFileSystem;
+  private readonly symlinkNamespace: "mount" | "global";
   private mounts: Map<string, MountEntry> = new Map();
 
   constructor(options?: MountableFsOptions) {
     this.baseFs = options?.base ?? new InMemoryFs();
+    this.symlinkNamespace = options?.symlinkNamespace ?? "mount";
 
     // Add initial mounts
     if (options?.mounts) {
@@ -244,17 +257,114 @@ export class MountableFs implements IFileSystem {
     return children;
   }
 
+  /** Resolve virtual links only when the backend explicitly permits it. */
+  private async resolveNamespacePath(
+    path: string,
+    followFinal: boolean,
+  ): Promise<string> {
+    validatePath(path, "access");
+    let normalized = normalizePath(path);
+    let followed = 0;
+    restart: while (true) {
+      const parts = normalized.split("/").filter(Boolean);
+      for (let index = 0; index < parts.length; index++) {
+        if (index === parts.length - 1 && !followFinal) break;
+        const candidate = `/${parts.slice(0, index + 1).join("/")}`;
+        // Mount ancestors are real directories in the combined namespace even
+        // when no entry exists in the base filesystem.
+        if (this.getChildMountPoints(candidate).length > 0) continue;
+        const { fs, relativePath } = this.routePath(candidate);
+        // Never bypass a real backend's own traversal/deny policy by resolving
+        // a link before passing the original path to that backend.
+        if (fs.supportsGlobalSymlinks !== true) return normalized;
+        let stat: FsStat;
+        try {
+          stat = await fs.lstat(relativePath);
+        } catch (error) {
+          if (isMissingPath(error)) return normalized;
+          throw error;
+        }
+        if (!stat.isSymbolicLink) continue;
+        if (++followed > MAX_SYMLINK_DEPTH) {
+          throw new Error(
+            `ELOOP: too many levels of symbolic links, access '${path}'`,
+          );
+        }
+        const target = await fs.readlink(relativePath);
+        validatePath(target, "readlink");
+        normalized = normalizePath(
+          joinPath(
+            resolvePath(dirname(candidate), target),
+            parts.slice(index + 1).join("/"),
+          ),
+        );
+        continue restart;
+      }
+      return normalized;
+    }
+  }
+
+  /** Synchronous methods are only for Bash's constructor initialization. */
+  supportsSyncInit(path: string, operation: SyncInitOperation): boolean {
+    const { fs, relativePath } = this.routePath(path);
+    return (
+      isSyncInitFs(fs) &&
+      typeof fs[operation] === "function" &&
+      fs.supportsSyncInit?.(relativePath, operation) !== false
+    );
+  }
+
+  mkdirSync(path: string, options?: MkdirOptions): void {
+    const { fs, relativePath } = this.routePath(path);
+    if (!isSyncInitFs(fs) || !this.supportsSyncInit(path, "mkdirSync")) {
+      throw new Error(
+        `ENOTSUP: backend does not support synchronous mkdir '${path}'`,
+      );
+    }
+    fs.mkdirSync(relativePath, options);
+  }
+
+  writeFileSync(path: string, content: FileContent): void {
+    const { fs, relativePath } = this.routePath(path);
+    if (!isSyncInitFs(fs) || !this.supportsSyncInit(path, "writeFileSync")) {
+      throw new Error(
+        `ENOTSUP: backend does not support synchronous write '${path}'`,
+      );
+    }
+    fs.writeFileSync(relativePath, content);
+  }
+
+  writeFileLazy(path: string, lazy: LazyFileProvider): void {
+    const { fs, relativePath } = this.routePath(path);
+    if (
+      !isSyncInitFs(fs) ||
+      !fs.writeFileLazy ||
+      !this.supportsSyncInit(path, "writeFileLazy")
+    ) {
+      throw new Error(
+        `ENOTSUP: backend does not support lazy initialization '${path}'`,
+      );
+    }
+    fs.writeFileLazy(relativePath, lazy);
+  }
+
   // ==================== IFileSystem Implementation ====================
 
   async readFile(
     path: string,
     options?: ReadFileOptions | BufferEncoding,
   ): Promise<string> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const { fs, relativePath } = this.routePath(path);
     return fs.readFile(relativePath, options);
   }
 
   async readFileBytes(path: string): Promise<ByteString> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const { fs, relativePath } = this.routePath(path);
     // Mounted filesystem may be a user-supplied IFileSystem that predates
     // readFileBytes; fall through to readBytesFrom which handles both.
@@ -262,6 +372,9 @@ export class MountableFs implements IFileSystem {
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const { fs, relativePath } = this.routePath(path);
     return fs.readFileBuffer(relativePath);
   }
@@ -271,6 +384,9 @@ export class MountableFs implements IFileSystem {
     offset: number,
     length: number,
   ): Promise<Uint8Array> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const { fs, relativePath } = this.routePath(path);
     return readRangeFrom(fs, relativePath, offset, length);
   }
@@ -280,6 +396,9 @@ export class MountableFs implements IFileSystem {
     content: FileContent,
     options?: WriteFileOptions | BufferEncoding,
   ): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const { fs, relativePath } = this.routePath(path);
     return fs.writeFile(relativePath, content, options);
   }
@@ -289,11 +408,17 @@ export class MountableFs implements IFileSystem {
     content: FileContent,
     options?: WriteFileOptions | BufferEncoding,
   ): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const { fs, relativePath } = this.routePath(path);
     return fs.appendFile(relativePath, content, options);
   }
 
   async exists(path: string): Promise<boolean> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const normalized = normalizePath(path);
 
     // Check if this is exactly a mount point
@@ -313,6 +438,9 @@ export class MountableFs implements IFileSystem {
   }
 
   async stat(path: string): Promise<FsStat> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const normalized = normalizePath(path);
 
     // Check if this is exactly a mount point
@@ -360,6 +488,9 @@ export class MountableFs implements IFileSystem {
   }
 
   async lstat(path: string): Promise<FsStat> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, false);
+    }
     const normalized = normalizePath(path);
 
     // Check if this is exactly a mount point
@@ -404,6 +535,9 @@ export class MountableFs implements IFileSystem {
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, false);
+    }
     const normalized = normalizePath(path);
 
     // Cannot create directory at mount point
@@ -426,6 +560,9 @@ export class MountableFs implements IFileSystem {
   }
 
   async readdir(path: string): Promise<string[]> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const normalized = normalizePath(path);
     const entries = new Set<string>();
     let readdirError: Error | null = null;
@@ -463,7 +600,49 @@ export class MountableFs implements IFileSystem {
     return Array.from(entries).sort();
   }
 
+  async readdirWithFileTypes(path: string): Promise<DirentEntry[]> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
+    const mounts = this.getChildMountPoints(path);
+    const { fs, relativePath } = this.routePath(path);
+    const entries = new Map<string, DirentEntry>();
+    try {
+      const typed = fs.readdirWithFileTypes
+        ? await fs.readdirWithFileTypes(relativePath)
+        : await Promise.all(
+            (await fs.readdir(relativePath)).map(async (name) => {
+              const stat = await fs.lstat(joinPath(relativePath, name));
+              return {
+                name,
+                isFile: stat.isFile,
+                isDirectory: stat.isDirectory,
+                isSymbolicLink: stat.isSymbolicLink,
+              };
+            }),
+          );
+      for (const entry of typed) entries.set(entry.name, entry);
+    } catch (error) {
+      // A virtual mount parent need not exist in the underlying filesystem.
+      if (!isMissingPath(error) || mounts.length === 0) throw error;
+    }
+    for (const name of mounts) {
+      entries.set(name, {
+        name,
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+      });
+    }
+    return [...entries.values()].sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    );
+  }
+
   async rm(path: string, options?: RmOptions): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, false);
+    }
     const normalized = normalizePath(path);
 
     // Cannot remove mount points
@@ -482,7 +661,13 @@ export class MountableFs implements IFileSystem {
   }
 
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
-    const srcStat = await this.stat(src);
+    if (this.symlinkNamespace === "global") {
+      src = await this.resolveNamespacePath(src, false);
+      dest = await this.resolveNamespacePath(dest, false);
+    }
+    const srcStat = await (this.symlinkNamespace === "global"
+      ? this.lstat(src)
+      : this.stat(src));
     if (srcStat.isDirectory && isSameOrDescendantPath(src, dest)) {
       throw new Error(`EINVAL: cannot copy '${src}' into itself, '${dest}'`);
     }
@@ -503,8 +688,15 @@ export class MountableFs implements IFileSystem {
   }
 
   async mv(src: string, dest: string): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      src = await this.resolveNamespacePath(src, false);
+      dest = await this.resolveNamespacePath(dest, false);
+      if (src === dest) return;
+    }
     const normalized = normalizePath(src);
-    const srcStat = await this.stat(src);
+    const srcStat = await (this.symlinkNamespace === "global"
+      ? this.lstat(src)
+      : this.stat(src));
     if (srcStat.isDirectory && isSameOrDescendantPath(src, dest)) {
       throw new Error(`EINVAL: cannot move '${src}' into itself, '${dest}'`);
     }
@@ -565,6 +757,9 @@ export class MountableFs implements IFileSystem {
   }
 
   async chmod(path: string, mode: number): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, false);
+    }
     const normalized = normalizePath(path);
 
     // Cannot chmod mount points directly
@@ -578,11 +773,18 @@ export class MountableFs implements IFileSystem {
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      linkPath = await this.resolveNamespacePath(linkPath, false);
+    }
     const { fs, relativePath } = this.routePath(linkPath);
     return fs.symlink(target, relativePath);
   }
 
   async link(existingPath: string, newPath: string): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      existingPath = await this.resolveNamespacePath(existingPath, false);
+      newPath = await this.resolveNamespacePath(newPath, false);
+    }
     const existingRoute = this.routePath(existingPath);
     const newRoute = this.routePath(newPath);
 
@@ -600,6 +802,9 @@ export class MountableFs implements IFileSystem {
   }
 
   async readlink(path: string): Promise<string> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, false);
+    }
     const { fs, relativePath } = this.routePath(path);
     return fs.readlink(relativePath);
   }
@@ -609,6 +814,9 @@ export class MountableFs implements IFileSystem {
    * This is equivalent to POSIX realpath().
    */
   async realpath(path: string): Promise<string> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const normalized = normalizePath(path);
 
     // Check if this is exactly a mount point
@@ -648,15 +856,76 @@ export class MountableFs implements IFileSystem {
     options?: CpOptions,
   ): Promise<void> {
     const srcStat = await this.lstat(src);
+    if (srcStat.isDirectory && !options?.recursive) {
+      throw new Error(`cp: ${src} is a directory (not copied)`);
+    }
+    const destRoute = this.routePath(dest);
+    if (
+      this.symlinkNamespace === "global" &&
+      destRoute.fs.supportsGlobalSymlinks === true
+    ) {
+      let destination: FsStat | undefined;
+      try {
+        destination = await this.lstat(dest);
+      } catch (error) {
+        if (!isMissingPath(error)) throw error;
+      }
+      if (destination?.isDirectory && !srcStat.isDirectory) {
+        throw new Error(`EISDIR: cannot replace directory, cp '${dest}'`);
+      }
+      // Pre-admit a replacement through its owning backend before changing
+      // the destination. A backend can reject symlinks or writes by policy.
+      if (
+        !srcStat.isDirectory &&
+        (destination?.isSymbolicLink ||
+          (srcStat.isSymbolicLink && destination?.isFile))
+      ) {
+        const { fs, relativePath } = destRoute;
+        let staged: string;
+        while (true) {
+          staged = joinPath(
+            dirname(relativePath),
+            `.just-bash-copy-${crypto.randomUUID()}`,
+          );
+          try {
+            await fs.lstat(staged);
+          } catch (error) {
+            if (isMissingPath(error)) break;
+            throw error;
+          }
+        }
+        let created = false;
+        try {
+          if (srcStat.isSymbolicLink) {
+            await fs.symlink(await this.readlink(src), staged);
+          } else {
+            await fs.writeFile(staged, await this.readFileBuffer(src));
+            created = true;
+            await fs.chmod(staged, srcStat.mode);
+          }
+          created = true;
+          await fs.mv(staged, relativePath);
+        } catch (error) {
+          if (!created) throw error;
+          try {
+            await fs.rm(staged, { force: true });
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              "Copy and temporary-entry cleanup failed",
+            );
+          }
+          throw error;
+        }
+        return;
+      }
+    }
 
     if (srcStat.isFile) {
       const content = await this.readFileBuffer(src);
       await this.writeFile(dest, content);
       await this.chmod(dest, srcStat.mode);
     } else if (srcStat.isDirectory) {
-      if (!options?.recursive) {
-        throw new Error(`cp: ${src} is a directory (not copied)`);
-      }
       await this.mkdir(dest, { recursive: true });
       const children = await this.readdir(src);
       for (const child of children) {
@@ -677,7 +946,18 @@ export class MountableFs implements IFileSystem {
    * @param mtime - Modification time
    */
   async utimes(path: string, atime: Date, mtime: Date): Promise<void> {
+    if (this.symlinkNamespace === "global") {
+      path = await this.resolveNamespacePath(path, true);
+    }
     const { fs, relativePath } = this.routePath(path);
     return fs.utimes(relativePath, atime, mtime);
   }
+}
+
+function isMissingPath(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (("code" in error && error.code === "ENOENT") ||
+      error.message.includes("ENOENT"))
+  );
 }

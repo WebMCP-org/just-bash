@@ -29,6 +29,8 @@ describe("published package declarations", () => {
       const [pack] = JSON.parse(stdout) as PackResult[];
       const files = new Set(pack.files.map((file) => file.path));
 
+      expect(files.has("dist/bundle/fs-encoding.js")).toBe(true);
+      expect(files.has("dist/fs/encoding.d.ts")).toBe(true);
       expect(files.has("dist/security/index.d.ts")).toBe(true);
       expect(files.has("dist/security/types.d.ts")).toBe(true);
       expect(files.has("dist/transform/pipeline.d.ts")).toBe(true);
@@ -40,4 +42,27 @@ describe("published package declarations", () => {
       await rm(npmCache, { recursive: true, force: true });
     }
   }, 30_000);
+  it("imports the filesystem codecs through the published package export", async () => {
+    const { stdout } = await execFileAsync(
+      "node",
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import { fromBuffer, getEncoding, toBuffer } from "just-bash/fs/encoding";
+      const bytes = toBuffer("00ff80", "hex");
+      console.log(JSON.stringify({
+        bytes: [...bytes],
+        hex: fromBuffer(bytes, "hex"),
+        base64: fromBuffer(bytes, "base64"),
+        encoding: getEncoding({ encoding: "latin1" }),
+      }));
+    `,
+      ],
+      { cwd: packageRoot },
+    );
+    expect(stdout).toBe(
+      '{"bytes":[0,255,128],"hex":"00ff80","base64":"AP+A","encoding":"latin1"}\n',
+    );
+  });
 });

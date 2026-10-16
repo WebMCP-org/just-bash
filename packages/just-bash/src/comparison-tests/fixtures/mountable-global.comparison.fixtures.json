@@ -1,0 +1,9 @@
+{
+  "8711b61881202b71": {
+    "command": "\nmkdir -p mounted/source\nprintf 'value\\n' > mounted/source/file\nln -s \"$PWD/mounted/source/file\" mounted/source/absolute\nln -s source/file mounted/relative\nln -s \"$PWD/mounted/source\" alias\ncat alias/file mounted/source/absolute mounted/relative\ncp -R mounted/source/absolute copied-link\ncat copied-link\nreadlink mounted/relative\ncp -R mounted/source mounted/copied\nmv mounted/copied mounted/moved\ncat mounted/moved/absolute\nrm mounted/moved/absolute\ncat mounted/source/file\n",
+    "files": {},
+    "stdout": "value\nvalue\nvalue\nvalue\nsource/file\nvalue\nvalue\n",
+    "stderr": "",
+    "exitCode": 0
+  }
+}

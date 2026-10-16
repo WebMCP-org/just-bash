@@ -327,6 +327,37 @@ const fs = new MountableFs({
 });
 ```
 
+Symlinks are mount-local by default: an absolute target is interpreted by its
+own backend, and cannot reach another mount. Pure virtual filesystems can opt
+into a shared namespace with `symlinkNamespace: "global"`:
+
+```typescript
+import { InMemoryFs, MountableFs } from "just-bash";
+
+const fs = new MountableFs({
+  symlinkNamespace: "global",
+  mounts: [{ mountPoint: "/tools", filesystem: new InMemoryFs({ "/tool": "data" }) }],
+});
+await fs.symlink("/tools/tool", "/shortcut");
+await fs.readFile("/shortcut"); // "data"
+```
+
+Global resolution applies only to backends declaring
+`readonly supportsGlobalSymlinks = true`. `InMemoryFs` declares this capability;
+custom pure virtual backends may do so when they preserve literal symlink
+text. Host-backed filesystems retain their own symlink policy, including the
+default denial in `ReadWriteFs` and `OverlayFs`. Enabling global resolution does
+not bypass those gates.
+
+MountableFs also delegates Bash's synchronous constructor initialization to
+backends that support it. Mixed configurations can keep `/bin`, `/usr`, `/dev`
+and `/proc` in memory while leaving an asynchronous base workspace untouched.
+These synchronous methods are initialization capabilities, outside the async
+`IFileSystem` interface; unsupported paths throw `ENOTSUP` when called directly.
+
+Custom backends can share the built-in filesystem encoding rules through the
+pure `just-bash/fs/encoding` export (`toBuffer`, `fromBuffer`, `getEncoding`).
+
 ## Optional Capabilities
 
 ### Network Access

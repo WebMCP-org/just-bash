@@ -120,7 +120,14 @@ export interface CpOptions {
  * - Custom implementations (e.g., remote storage, browser IndexedDB)
  */
 export interface IFileSystem {
-  // Note: Sync method are not supported and must not be added.
+  // Note: Sync methods are not supported and must not be added.
+  /**
+   * This pure virtual backend stores literal symlink targets and permits a
+   * MountableFs global namespace to resolve them before routing operations.
+   * Host-backed filesystems should leave this unset so their own symlink
+   * traversal policy remains authoritative.
+   */
+  readonly supportsGlobalSymlinks?: boolean;
   /**
    * Read the contents of a file as decoded text. Default encoding is utf8;
    * pass an explicit text encoding (`"ascii"`, etc.) to override.
